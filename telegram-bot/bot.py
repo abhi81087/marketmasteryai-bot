@@ -58,6 +58,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /movers             — Today's top gainers & losers
   /movers us          — US gainers & losers only
   /movers india       — Indian gainers & losers only
+  /summary AAPL       — Combined technicals + sentiment trade brief
 
 *Other commands:*
   /start — Welcome message
@@ -445,6 +446,106 @@ async def compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/summary AAPL`\n\nCombines technical analysis + news sentiment into a concise trade brief.",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    msg = await update.message.reply_text(
+        f"⚡ Building trade brief for `{ticker}`...", parse_mode="Markdown"
+    )
+
+    try:
+        data = analyze(ticker)
+    except Exception as e:
+        logger.exception(f"Summary analysis error for {ticker}: {e}")
+        await msg.edit_text(f"❌ Could not fetch data for `{ticker}`.", parse_mode="Markdown")
+        return
+
+    try:
+        sent = fetch_sentiment(ticker)
+    except Exception:
+        sent = {"overall": "NEUTRAL", "bullish": 0, "bearish": 0, "neutral": 0, "total": 0}
+
+    sig = data["signal"]["action"]
+    rsi = data["rsi"]
+    chg = data["change_pct"]
+    price = data["last_close"]
+    swing = data["swing"]
+    brk = data["breakout"]
+    ema_trend = "Bullish" if data["ema9"] > data["ema21"] else "Bearish"
+    macd_dir = "Bullish" if data["macd"] > data["macd_signal"] else "Bearish"
+    news_mood = sent["overall"]
+
+    if "STRONG BUY" in sig:   sig_icon = "🟢🟢"
+    elif "BUY" in sig:         sig_icon = "🟢"
+    elif "STRONG SELL" in sig: sig_icon = "🔴🔴"
+    elif "SELL" in sig:        sig_icon = "🔴"
+    else:                      sig_icon = "🟡"
+
+    news_icon = "🟢" if news_mood == "BULLISH" else ("🔴" if news_mood == "BEARISH" else "🟡")
+
+    tech_bullish = sig in ("BUY", "STRONG BUY")
+    tech_bearish = sig in ("SELL", "STRONG SELL")
+    news_bullish = news_mood == "BULLISH"
+    news_bearish = news_mood == "BEARISH"
+
+    if tech_bullish and news_bullish:
+        trader_note = "📗 Technicals and news align bullish — higher-conviction long setup."
+    elif tech_bearish and news_bearish:
+        trader_note = "📕 Technicals and news both bearish — short or avoid."
+    elif tech_bullish and news_bearish:
+        trader_note = "⚠️ Bullish chart but negative news — wait for news to settle before entering."
+    elif tech_bearish and news_bullish:
+        trader_note = "⚠️ Bearish chart despite positive news — news may already be priced in."
+    elif tech_bullish:
+        trader_note = "📘 Bullish technicals with neutral news — trend-driven setup, watch volume."
+    elif tech_bearish:
+        trader_note = "📘 Bearish technicals with neutral news — trend-driven short, manage risk."
+    else:
+        trader_note = "📘 Mixed signals — no clear edge right now. Wait for confirmation."
+
+    if brk["breakout_up"]:
+        breakout_line = "🚨 Active breakout UP (20-day resistance cleared with volume)"
+    elif brk["breakout_down"]:
+        breakout_line = "💥 Active breakdown DOWN (20-day support broken with volume)"
+    else:
+        breakout_line = f"Support `${brk['support']}` — Resistance `${brk['resistance']}`"
+
+    chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+
+    lines = [
+        f"⚡ *Trade Brief — {data['name']} (`{ticker}`)*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"💵 *Price:* `${price}` ({chg_str})",
+        f"🎯 *Signal:* {sig_icon} {sig}",
+        f"📰 *News:* {news_icon} {news_mood} ({sent['bullish']}↑ {sent['bearish']}↓ from {sent['total']} articles)",
+        "",
+        "📐 *Key Technicals:*",
+        f"  RSI `{rsi}` | EMA `{ema_trend}` | MACD `{macd_dir}`",
+        f"  EMA9 `${data['ema9']}` | EMA21 `${data['ema21']}` | EMA50 `${data['ema50']}`",
+        "",
+        "📍 *Key Levels:*",
+        f"  {breakout_line}",
+        "",
+        f"🏹 *Swing Setup:* {swing['direction']} (confidence `{swing['confidence']}%`)",
+        f"  Stop Loss `${swing['stop_loss']}` | T1 `${swing['target1']}` | T2 `${swing['target2']}`",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"💡 {trader_note}",
+        "",
+        "⚠️ _Not financial advice. Always do your own research._",
+    ]
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def movers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = " ".join(context.args).lower().strip() if context.args else ""
 
@@ -745,6 +846,7 @@ def main():
     app.add_handler(CommandHandler("compare", compare_handler))
     app.add_handler(CommandHandler("sentiment", sentiment_handler))
     app.add_handler(CommandHandler("movers", movers_handler))
+    app.add_handler(CommandHandler("summary", summary_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
