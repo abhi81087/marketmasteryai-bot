@@ -8,7 +8,7 @@ from formatter import format_report
 from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlist
 from alerts import set_alert, remove_alert, get_alert, get_all_alerts
 from sentiment import fetch_sentiment
-from journal import add_trade, get_trades, delete_trade, get_pnl_stats
+from journal import add_trade, get_trades, delete_trade, get_pnl_stats, get_streak_and_equity
 from price_alerts import (
     add_price_alert, get_user_alerts, remove_price_alert,
     remove_triggered_alert, get_all_price_alerts,
@@ -88,6 +88,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /trades                        — View your trade history
   /pnl                           — P&L stats (win rate, profit factor)
   /deltrade 3                    — Delete trade by ID
+  /streak                        — Win/loss streak & equity curve
 
 *Other commands:*
   /start — Welcome message
@@ -1649,6 +1650,67 @@ async def deltrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def streak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    data    = get_streak_and_equity(user_id)
+
+    if not data:
+        await update.message.reply_text(
+            "📒 No trades logged yet.\n\nUse `/journal AAPL long 150 165 10` to log one.",
+            parse_mode="Markdown",
+        )
+        return
+
+    streak_icon = "🔥" if data["streak_type"] == "win" else "🧊"
+    streak_label = "Win streak" if data["streak_type"] == "win" else "Loss streak"
+    streak_msg   = (
+        f"You're on a *{data['streak_count']}-trade {streak_label}!* 💪 Keep it up."
+        if data["streak_type"] == "win"
+        else f"You're on a *{data['streak_count']}-trade {streak_label}.* Stay patient and stick to your rules."
+    )
+
+    pnl_final = data["final_pnl"]
+    pnl_str   = f"+${pnl_final:,.2f}" if pnl_final >= 0 else f"-${abs(pnl_final):,.2f}"
+    pnl_icon  = "🟢" if pnl_final >= 0 else "🔴"
+
+    # Label first and last trade on the equity axis
+    curve = data["sparkline"]
+    n     = data["trade_count"]
+
+    # Build a mini scale for the curve
+    cumulative = data["cumulative"]
+    mn = min(cumulative)
+    mx = max(cumulative)
+
+    lines = [
+        f"📈 *Streak & Equity Curve*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"{streak_icon} *Current streak:* {data['streak_count']}× {streak_label.lower()}",
+        streak_msg,
+        "",
+        "─────────────────────────",
+        f"🏆 *Longest win streak:*  `{data['longest_win']}` trades",
+        f"💥 *Longest loss streak:* `{data['longest_loss']}` trades",
+        "",
+        "─────────────────────────",
+        f"📉 *Equity Curve* ({n} trades)",
+        f"  High: `${mx:,.2f}`",
+        f"  `{curve}`",
+        f"  Low:  `${mn:,.2f}`",
+        f"  Trade #1 ───────────── #{n}",
+        "",
+        "─────────────────────────",
+        f"{pnl_icon} *Cumulative P&L:*  `{pnl_str}`",
+        f"📉 *Max Drawdown:*    `-${data['max_drawdown']:,.2f}`",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "_Use /pnl for full statistics or /trades to review your entries._",
+    ]
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1818,6 +1880,7 @@ def main():
     app.add_handler(CommandHandler("trades", trades_handler))
     app.add_handler(CommandHandler("pnl", pnl_handler))
     app.add_handler(CommandHandler("deltrade", deltrade_handler))
+    app.add_handler(CommandHandler("streak", streak_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))

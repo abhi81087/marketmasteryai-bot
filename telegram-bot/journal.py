@@ -69,6 +69,69 @@ def delete_trade(user_id: int, trade_id: int) -> bool:
     return True
 
 
+def get_streak_and_equity(user_id: int) -> dict | None:
+    trades = get_trades(user_id)
+    if not trades:
+        return None
+
+    # Current streak — walk backwards from newest
+    streak_type = "win" if trades[-1]["won"] else "loss"
+    streak_count = 0
+    for t in reversed(trades):
+        if t["won"] == (streak_type == "win"):
+            streak_count += 1
+        else:
+            break
+
+    # Longest win / loss streaks ever
+    longest_win = longest_loss = 0
+    cur_win = cur_loss = 0
+    for t in trades:
+        if t["won"]:
+            cur_win += 1
+            cur_loss = 0
+            longest_win = max(longest_win, cur_win)
+        else:
+            cur_loss += 1
+            cur_win = 0
+            longest_loss = max(longest_loss, cur_loss)
+
+    # Cumulative P&L equity curve
+    cumulative = []
+    running = 0.0
+    for t in trades:
+        running = round(running + t["pnl"], 2)
+        cumulative.append(running)
+
+    # Sparkline using 8 block levels
+    BLOCKS = "▁▂▃▄▅▆▇█"
+    mn, mx = min(cumulative), max(cumulative)
+    span = mx - mn if mx != mn else 1
+    sparkline = "".join(
+        BLOCKS[min(7, int((v - mn) / span * 7))] for v in cumulative
+    )
+
+    # Drawdown: max peak-to-trough
+    peak = cumulative[0]
+    max_dd = 0.0
+    for v in cumulative:
+        peak = max(peak, v)
+        dd = peak - v
+        max_dd = max(max_dd, dd)
+
+    return {
+        "streak_type": streak_type,
+        "streak_count": streak_count,
+        "longest_win": longest_win,
+        "longest_loss": longest_loss,
+        "cumulative": cumulative,
+        "sparkline": sparkline,
+        "final_pnl": running,
+        "max_drawdown": round(max_dd, 2),
+        "trade_count": len(trades),
+    }
+
+
 def get_pnl_stats(user_id: int) -> dict:
     trades = get_trades(user_id)
     if not trades:
