@@ -80,6 +80,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /report AAPL          — Full shareable analysis report for a stock
   /sector               — Avg RSI & dominant signal by market sector
   /heatmap              — Colour-coded signal grid of all 30 stocks
+  /risk AAPL 10000      — Position sizing & risk/reward for your capital
 
 *Other commands:*
   /start — Welcome message
@@ -1373,6 +1374,122 @@ async def heatmap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def risk_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 2:
+        await update.message.reply_text(
+            "Usage: `/risk AAPL 10000`\n\n"
+            "Calculates position sizing, max loss, and risk/reward based on your capital and ATR stop loss.\n\n"
+            "Capital is in the same currency as the stock (USD for US stocks, INR for Indian stocks).",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    try:
+        capital = float(args[1].replace(",", "").replace("$", "").replace("₹", ""))
+        if capital <= 0:
+            raise ValueError()
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid capital amount. Example: `/risk AAPL 10000`", parse_mode="Markdown"
+        )
+        return
+
+    risk_pct_arg = 2.0
+    if len(args) >= 3:
+        try:
+            risk_pct_arg = float(args[2].replace("%", ""))
+            risk_pct_arg = max(0.1, min(risk_pct_arg, 20.0))
+        except ValueError:
+            pass
+
+    msg = await update.message.reply_text(
+        f"📐 Calculating position size for `{ticker}`...", parse_mode="Markdown"
+    )
+
+    try:
+        data = analyze(ticker)
+    except Exception as e:
+        logger.exception(f"Risk calc error for {ticker}: {e}")
+        await msg.edit_text(f"❌ Could not fetch data for `{ticker}`.", parse_mode="Markdown")
+        return
+
+    price     = data["last_close"]
+    atr       = data["swing"]["atr"]
+    stop_loss = data["swing"]["stop_loss"]
+    target1   = data["swing"]["target1"]
+    target2   = data["swing"]["target2"]
+    direction = data["swing"]["direction"]
+    sig       = data["signal"]["action"]
+
+    risk_per_share = abs(price - stop_loss)
+    if risk_per_share == 0:
+        await msg.edit_text("⚠️ Stop loss equals current price — cannot calculate risk.", parse_mode="Markdown")
+        return
+
+    max_risk_amount  = round(capital * (risk_pct_arg / 100), 2)
+    shares           = max(1, int(max_risk_amount / risk_per_share))
+    position_value   = round(shares * price, 2)
+    actual_risk      = round(shares * risk_per_share, 2)
+    actual_risk_pct  = round((actual_risk / capital) * 100, 2)
+    reward1          = round(shares * abs(target1 - price), 2)
+    reward2          = round(shares * abs(target2 - price), 2)
+    rr1              = round(reward1 / actual_risk, 2) if actual_risk else 0
+    rr2              = round(reward2 / actual_risk, 2) if actual_risk else 0
+    leftover         = round(capital - position_value, 2)
+
+    fits_in_capital = position_value <= capital
+
+    if "STRONG BUY" in sig:   sig_icon = "🟢🟢"
+    elif "BUY" in sig:         sig_icon = "🟢"
+    elif "STRONG SELL" in sig: sig_icon = "🔴🔴"
+    elif "SELL" in sig:        sig_icon = "🔴"
+    else:                       sig_icon = "🟡"
+
+    dir_arrow = "⬆️" if direction == "LONG" else "⬇️"
+
+    rr1_verdict = "✅ Good" if rr1 >= 2 else ("⚠️ Marginal" if rr1 >= 1 else "❌ Poor")
+    rr2_verdict = "✅ Good" if rr2 >= 2 else ("⚠️ Marginal" if rr2 >= 1 else "❌ Poor")
+
+    lines = [
+        f"📐 *Position Sizing — `{ticker}`*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"💵 Price:    `${price}`  |  Signal: {sig_icon} {sig}",
+        f"📊 ATR(14): `${atr}`  |  Swing: {dir_arrow} {direction}",
+        "",
+        "─────────────────────────",
+        f"💰 *Your Capital:* `${capital:,.2f}`",
+        f"⚠️ *Risk per trade:* `{risk_pct_arg}%` = `${max_risk_amount:,.2f}`",
+        "",
+        "─────────────────────────",
+        f"📦 *Position Sizing:*",
+        f"  Shares to buy:     `{shares:,}`",
+        f"  Position value:    `${position_value:,.2f}`" + (" ✅" if fits_in_capital else " ⚠️ exceeds capital"),
+        f"  Capital remaining: `${leftover:,.2f}`",
+        "",
+        "─────────────────────────",
+        f"🛡️ *Risk Management:*",
+        f"  Entry:      `${price}`",
+        f"  Stop Loss:  `${stop_loss}`  (−`${round(risk_per_share, 2)}` per share)",
+        f"  Max Loss:   `${actual_risk:,.2f}` ({actual_risk_pct}% of capital)",
+        "",
+        "─────────────────────────",
+        f"🎯 *Reward Targets:*",
+        f"  Target 1:  `${target1}`  → Profit `${reward1:,.2f}`  R:R `{rr1}x` {rr1_verdict}",
+        f"  Target 2:  `${target2}`  → Profit `${reward2:,.2f}`  R:R `{rr2}x` {rr2_verdict}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "💡 *Tip:* Add your risk % after the capital to customise:",
+        "  `/risk AAPL 10000 1` for 1% risk per trade.",
+        "",
+        "⚠️ _Not financial advice. Always use a stop loss._",
+    ]
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1537,6 +1654,7 @@ def main():
     app.add_handler(CommandHandler("report", report_handler))
     app.add_handler(CommandHandler("sector", sector_handler))
     app.add_handler(CommandHandler("heatmap", heatmap_handler))
+    app.add_handler(CommandHandler("risk", risk_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
