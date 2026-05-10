@@ -48,6 +48,11 @@ Send me any stock ticker symbol to get a full technical analysis.
   /myalert           — Check your current alert time
   /cancelalert       — Cancel your daily alert
 
+*Market commands:*
+  /top           — Top signals from popular US + Indian stocks
+  /top us        — Top signals from US stocks only
+  /top india     — Top signals from Indian stocks only
+
 *Other commands:*
   /start — Welcome message
   /help  — Show this help
@@ -326,6 +331,114 @@ async def cancelalert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("You don't have an active alert.", parse_mode="Markdown")
 
 
+TOP_US = [
+    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN",
+    "META", "TSLA", "AMD", "NFLX", "JPM",
+    "V", "MA", "BAC", "DIS", "INTC",
+]
+
+TOP_INDIA = [
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
+    "SBIN.NS", "WIPRO.NS", "BAJFINANCE.NS", "AXISBANK.NS", "KOTAKBANK.NS",
+    "LT.NS", "MARUTI.NS", "TATAMOTORS.NS", "SUNPHARMA.NS", "ADANIENT.NS",
+]
+
+SIGNAL_RANK = {
+    "STRONG BUY": 0,
+    "STRONG SELL": 1,
+    "BUY": 2,
+    "SELL": 3,
+    "HOLD / NEUTRAL": 4,
+}
+
+
+async def top_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    arg = " ".join(context.args).lower().strip() if context.args else ""
+
+    if arg == "us":
+        tickers = TOP_US
+        label = "🇺🇸 US Stocks"
+    elif arg in ("india", "in"):
+        tickers = TOP_INDIA
+        label = "🇮🇳 Indian Stocks"
+    else:
+        tickers = TOP_US + TOP_INDIA
+        label = "🌍 US + Indian Stocks"
+
+    msg = await update.message.reply_text(
+        f"🔍 Scanning {len(tickers)} popular stocks for top signals...",
+        parse_mode="Markdown",
+    )
+
+    hits = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            sig = data["signal"]["action"]
+            score = data["signal"]["score"]
+            rsi = data["rsi"]
+            chg = data["change_pct"]
+            price = data["last_close"]
+            brk = data["breakout"]
+            swing_dir = data["swing"]["direction"]
+
+            breakout_active = brk["breakout_up"] or brk["breakout_down"]
+            is_strong = "STRONG" in sig
+            is_buy_sell = sig in ("BUY", "SELL")
+
+            if not (is_strong or (is_buy_sell and breakout_active)):
+                continue
+
+            if "STRONG BUY" in sig:
+                sig_icon = "🟢🟢"
+            elif "BUY" in sig:
+                sig_icon = "🟢"
+            elif "STRONG SELL" in sig:
+                sig_icon = "🔴🔴"
+            else:
+                sig_icon = "🔴"
+
+            breakout_tag = ""
+            if brk["breakout_up"]:
+                breakout_tag = " 🚨BRK↑"
+            elif brk["breakout_down"]:
+                breakout_tag = " 💥BRK↓"
+
+            chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+            hits.append({
+                "rank": SIGNAL_RANK.get(sig, 9),
+                "score": abs(score),
+                "line": f"{sig_icon} *{ticker}* `${price}` ({chg_str}) | RSI `{rsi}` | {swing_dir}{breakout_tag}",
+            })
+        except Exception as e:
+            logger.warning(f"Top scan error for {ticker}: {e}")
+            errors.append(ticker)
+
+    hits.sort(key=lambda x: (x["rank"], -x["score"]))
+
+    lines = [f"🏆 *Top Signals — {label}*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    if hits:
+        lines.append("*Strong signals only (STRONG BUY / STRONG SELL / breakout):*")
+        lines.append("")
+        for h in hits:
+            lines.append(h["line"])
+    else:
+        lines.append("No strong signals right now — market is mostly neutral.")
+        lines.append("Try again later or use /scan on your own watchlist.")
+
+    if errors:
+        lines.append(f"\n_⚠️ {len(errors)} ticker(s) could not be fetched._")
+
+    lines.append("")
+    lines.append("_Tap any ticker for the full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def analyze_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if text.startswith("/"):
@@ -388,6 +501,7 @@ def main():
     app.add_handler(CommandHandler("remove", remove_handler))
     app.add_handler(CommandHandler("clear", clear_handler))
     app.add_handler(CommandHandler("scan", scan_handler))
+    app.add_handler(CommandHandler("top", top_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
