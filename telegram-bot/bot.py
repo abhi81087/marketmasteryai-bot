@@ -9,6 +9,7 @@ from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlis
 from alerts import set_alert, remove_alert, get_alert, get_all_alerts
 from sentiment import fetch_sentiment
 from journal import add_trade, get_trades, delete_trade, get_pnl_stats, get_streak_and_equity
+from backtest import run_backtest
 from price_alerts import (
     add_price_alert, get_user_alerts, remove_price_alert,
     remove_triggered_alert, get_all_price_alerts,
@@ -89,6 +90,10 @@ Send me any stock ticker symbol to get a full technical analysis.
   /pnl                           — P&L stats (win rate, profit factor)
   /deltrade 3                    — Delete trade by ID
   /streak                        — Win/loss streak & equity curve
+
+*Backtesting:*
+  /backtest AAPL         — EMA 9/21 crossover backtest (1 year)
+  /backtest AAPL 2y      — Specify period: 6mo 1y 2y 5y
 
 *Other commands:*
   /start — Welcome message
@@ -1650,6 +1655,122 @@ async def deltrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def backtest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/backtest TICKER [PERIOD]`\n\n"
+            "Runs an EMA 9/21 crossover strategy on historical data.\n\n"
+            "Periods: `6mo`  `1y`  `2y`  `5y` (default: `1y`)\n\n"
+            "Examples:\n"
+            "  `/backtest AAPL`\n"
+            "  `/backtest TCS.NS 2y`\n"
+            "  `/backtest TSLA 6mo`",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    period = args[1].lower().strip() if len(args) >= 2 else "1y"
+    valid_periods = {"6mo", "1y", "2y", "5y"}
+    if period not in valid_periods:
+        await update.message.reply_text(
+            f"❌ Invalid period `{period}`. Choose from: `6mo` `1y` `2y` `5y`",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text(
+        f"⚙️ Running EMA 9/21 backtest on `{ticker}` ({period})...",
+        parse_mode="Markdown",
+    )
+
+    try:
+        result = run_backtest(ticker, period)
+    except Exception as e:
+        logger.exception(f"Backtest error for {ticker}: {e}")
+        await msg.edit_text(f"❌ Could not fetch data for `{ticker}`.", parse_mode="Markdown")
+        return
+
+    if result is None:
+        await msg.edit_text(
+            f"⚠️ Not enough data for `{ticker}`. Try a longer period or check the ticker.",
+            parse_mode="Markdown",
+        )
+        return
+
+    if result["total"] == 0:
+        await msg.edit_text(
+            f"📊 *Backtest — `{ticker}` ({period})*\n\n"
+            f"No EMA 9/21 crossovers found in this period.\n"
+            f"Buy & Hold return: `{result['buy_hold']}%`",
+            parse_mode="Markdown",
+        )
+        return
+
+    r = result
+    tr_icon = "🟢" if r["total_return"] >= 0 else "🔴"
+    bh_icon = "🟢" if r["buy_hold"] >= 0 else "🔴"
+    vs_bh   = r["total_return"] - r["buy_hold"]
+    vs_icon = "✅" if vs_bh >= 0 else "❌"
+    tr_str  = f"+{r['total_return']}%" if r["total_return"] >= 0 else f"{r['total_return']}%"
+    bh_str  = f"+{r['buy_hold']}%" if r["buy_hold"] >= 0 else f"{r['buy_hold']}%"
+    vs_str  = f"+{round(vs_bh,2)}%" if vs_bh >= 0 else f"{round(vs_bh,2)}%"
+    pf_str  = str(r["profit_factor"]) if r["profit_factor"] != float("inf") else "∞"
+
+    best_str  = f"+{r['best']['pnl_pct']}%" if r["best"]["pnl_pct"] >= 0 else f"{r['best']['pnl_pct']}%"
+    worst_str = f"+{r['worst']['pnl_pct']}%" if r["worst"]["pnl_pct"] >= 0 else f"{r['worst']['pnl_pct']}%"
+
+    # Last 5 trades table
+    recent = r["trades"][-5:]
+    trade_lines = []
+    for t in recent:
+        w  = "✅" if t["won"] else "❌"
+        ps = f"+{t['pnl_pct']}%" if t["pnl_pct"] >= 0 else f"{t['pnl_pct']}%"
+        op = " 🔓" if t.get("open") else ""
+        trade_lines.append(f"  {w} `{t['entry_date']}` → `{t['exit_date']}`  `{ps}`{op}")
+
+    lines = [
+        f"📊 *Backtest — `{ticker}` ({period})*",
+        f"_Strategy: EMA 9 / EMA 21 crossover_",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"📋 *Summary*",
+        f"  Total trades:  `{r['total']}` ({r['wins']}W / {r['losses']}L)",
+        f"  Win rate:      `{r['win_rate']}%`",
+        f"  Profit factor: `{pf_str}`",
+        "",
+        "─────────────────────────",
+        f"💰 *Returns*",
+        f"  {tr_icon} Strategy:    `{tr_str}`",
+        f"  {bh_icon} Buy & Hold:  `{bh_str}`",
+        f"  {vs_icon} Outperforms: `{vs_str}`",
+        "",
+        "─────────────────────────",
+        f"📈 *Per-Trade Stats*",
+        f"  Avg win:       `+{r['avg_win']}%`",
+        f"  Avg loss:      `{r['avg_loss']}%`",
+        f"  Max drawdown:  `-{r['max_drawdown']}%`",
+        f"  Best trade:    `{best_str}` ({r['best']['entry_date']})",
+        f"  Worst trade:   `{worst_str}` ({r['worst']['entry_date']})",
+        "",
+        "─────────────────────────",
+        f"📉 *Equity Curve*",
+        f"  `{r['sparkline']}`",
+        f"  Trade #1 {'─' * max(1, min(len(r['sparkline'])-4, 16))} #{r['total']}",
+        "",
+        "─────────────────────────",
+        f"🕒 *Last {len(recent)} Trades*",
+    ] + trade_lines + [
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "⚠️ _Past performance does not guarantee future results._",
+        "🔓 _= position still open at end of period_",
+    ]
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def streak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     data    = get_streak_and_equity(user_id)
@@ -1881,6 +2002,7 @@ def main():
     app.add_handler(CommandHandler("pnl", pnl_handler))
     app.add_handler(CommandHandler("deltrade", deltrade_handler))
     app.add_handler(CommandHandler("streak", streak_handler))
+    app.add_handler(CommandHandler("backtest", backtest_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
