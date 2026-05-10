@@ -79,6 +79,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /oversold india       — Indian stocks only
   /report AAPL          — Full shareable analysis report for a stock
   /sector               — Avg RSI & dominant signal by market sector
+  /heatmap              — Colour-coded signal grid of all 30 stocks
 
 *Other commands:*
   /start — Welcome message
@@ -1290,6 +1291,88 @@ async def sector_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def heatmap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tickers = TOP_US + TOP_INDIA
+    msg = await update.message.reply_text(
+        f"🗺️ Building heatmap for {len(tickers)} stocks...", parse_mode="Markdown"
+    )
+
+    results = {}
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            sig = data["signal"]["action"]
+            results[ticker] = {
+                "signal": sig,
+                "score": data["signal"]["score"],
+                "rsi": data["rsi"],
+                "chg": data["change_pct"],
+            }
+        except Exception as e:
+            logger.warning(f"Heatmap error for {ticker}: {e}")
+            errors.append(ticker)
+            results[ticker] = None
+
+    def cell(ticker: str) -> str:
+        r = results.get(ticker)
+        if not r:
+            return f"⬜`{ticker}`"
+        sig = r["signal"]
+        if "STRONG BUY" in sig:   icon = "🟢🟢"
+        elif "BUY" in sig:         icon = "🟢 "
+        elif "STRONG SELL" in sig: icon = "🔴🔴"
+        elif "SELL" in sig:        icon = "🔴 "
+        else:                      icon = "🟡 "
+        short = ticker.replace(".NS", "★").replace(".BO", "◆")
+        return f"{icon}`{short}`"
+
+    strong_buy  = sum(1 for r in results.values() if r and "STRONG BUY" in r["signal"])
+    buy         = sum(1 for r in results.values() if r and r["signal"] == "BUY")
+    hold        = sum(1 for r in results.values() if r and r["signal"] == "HOLD / NEUTRAL")
+    sell        = sum(1 for r in results.values() if r and r["signal"] == "SELL")
+    strong_sell = sum(1 for r in results.values() if r and "STRONG SELL" in r["signal"])
+    total_bull  = strong_buy + buy
+    total_bear  = strong_sell + sell
+    breadth     = "Bullish" if total_bull > total_bear else ("Bearish" if total_bear > total_bull else "Neutral")
+    breadth_icon = "🟢" if breadth == "Bullish" else ("🔴" if breadth == "Bearish" else "🟡")
+
+    avg_rsi_vals = [r["rsi"] for r in results.values() if r]
+    avg_rsi = round(sum(avg_rsi_vals) / len(avg_rsi_vals), 1) if avg_rsi_vals else 0
+
+    lines = ["🗺️ *Market Heatmap — 30 Stocks*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    sector_order = ["💻 Tech", "🏦 Finance", "🚗 Auto / EV", "🎬 Media", "⚡ Energy", "🏗️ Infra", "💊 Pharma"]
+    sector_tickers: dict[str, list[str]] = {}
+    for t in tickers:
+        sec = SECTOR_MAP.get(t, "🔹 Other")
+        sector_tickers.setdefault(sec, []).append(t)
+
+    for sec in sector_order:
+        group = sector_tickers.get(sec)
+        if not group:
+            continue
+        group_sorted = sorted(group, key=lambda t: -(results[t]["score"] if results.get(t) else 0))
+        lines.append(f"*{sec}*")
+        row = "  " + "  ".join(cell(t) for t in group_sorted)
+        lines.append(row)
+        lines.append("")
+
+    lines.append("━━━━━━━━━━━━━━━━━━━━")
+    lines.append(f"📊 *Market Breadth:* {breadth_icon} {breadth}")
+    lines.append(
+        f"  🟢🟢 `{strong_buy}`  🟢 `{buy}`  🟡 `{hold}`  🔴 `{sell}`  🔴🔴 `{strong_sell}`"
+    )
+    lines.append(f"  Avg RSI (30 stocks): `{avg_rsi}`")
+    lines.append(f"  Bull: `{total_bull}` stocks | Bear: `{total_bear}` stocks")
+    lines.append("")
+    lines.append("_★ = NSE (.NS)  |  Tap any ticker for full analysis_")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1453,6 +1536,7 @@ def main():
     app.add_handler(CommandHandler("oversold", oversold_handler))
     app.add_handler(CommandHandler("report", report_handler))
     app.add_handler(CommandHandler("sector", sector_handler))
+    app.add_handler(CommandHandler("heatmap", heatmap_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
