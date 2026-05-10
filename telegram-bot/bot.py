@@ -74,6 +74,9 @@ Send me any stock ticker symbol to get a full technical analysis.
   /gainers52w           — Stocks near 52-week high with strong momentum
   /gainers52w us        — US stocks only
   /gainers52w india     — Indian stocks only
+  /oversold             — RSI dip-buy setups with bullish EMA structure
+  /oversold us          — US stocks only
+  /oversold india       — Indian stocks only
 
 *Other commands:*
   /start — Welcome message
@@ -917,6 +920,108 @@ async def gainers52w_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def oversold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    arg = " ".join(context.args).lower().strip() if context.args else ""
+    if arg == "us":
+        tickers = TOP_US
+        label = "🇺🇸 US Stocks"
+    elif arg in ("india", "in"):
+        tickers = TOP_INDIA
+        label = "🇮🇳 Indian Stocks"
+    else:
+        tickers = TOP_US + TOP_INDIA
+        label = "🌍 US + Indian Stocks"
+
+    msg = await update.message.reply_text(
+        f"🔍 Scanning {len(tickers)} stocks for oversold dip-buy setups...",
+        parse_mode="Markdown",
+    )
+
+    hits = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            rsi = data["rsi"]
+
+            if rsi >= 35:
+                continue
+
+            ema9 = data["ema9"]
+            ema21 = data["ema21"]
+            ema50 = data["ema50"]
+            ema200 = data["ema200"]
+            price = data["last_close"]
+
+            bullish_structure = (ema50 > ema200) or (price > ema50) or (ema9 > ema21)
+            if not bullish_structure:
+                continue
+
+            macd_recovering = data["macd"] > data["macd_signal"]
+            vol_ratio = data["volume"]["volume_ratio"]
+            obv_trend = data["volume"]["obv_trend"]
+            chg = data["change_pct"]
+            chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+            swing = data["swing"]
+            brk = data["breakout"]
+
+            quality = 0
+            if ema50 > ema200:       quality += 2
+            if price > ema50:        quality += 1
+            if ema9 > ema21:         quality += 1
+            if macd_recovering:      quality += 1
+            if obv_trend == "Rising": quality += 1
+            if rsi < 25:             quality += 1
+
+            bb_bounce = price <= data["bb_lower"] * 1.02
+            bb_tag = " 📏BB" if bb_bounce else ""
+            macd_tag = " 📊MACD↑" if macd_recovering else ""
+            vol_tag = " 🔥Vol" if vol_ratio >= 2.0 else (" ⬆️Vol" if vol_ratio >= 1.5 else "")
+            brk_down_tag = " 💥BRK↓" if brk["breakout_down"] else ""
+
+            struct_parts = []
+            if ema50 > ema200: struct_parts.append("EMA50>200")
+            if price > ema50:  struct_parts.append("P>EMA50")
+            if ema9 > ema21:   struct_parts.append("EMA9>21")
+            struct_str = " | ".join(struct_parts) if struct_parts else "partial"
+
+            hits.append({
+                "rsi": rsi,
+                "quality": quality,
+                "line": (
+                    f"🔵 *{ticker}* `${price}` ({chg_str}) | RSI `{rsi}`\n"
+                    f"   Structure: `{struct_str}`{macd_tag}{bb_tag}{vol_tag}{brk_down_tag}\n"
+                    f"   Swing: `{swing['direction']}` | SL `${swing['stop_loss']}` | T1 `${swing['target1']}`"
+                ),
+            })
+        except Exception as e:
+            logger.warning(f"Oversold scan error for {ticker}: {e}")
+            errors.append(ticker)
+
+    hits.sort(key=lambda x: (-x["quality"], x["rsi"]))
+
+    lines = [f"🔵 *Oversold Dip-Buy Setups — {label}*", "━━━━━━━━━━━━━━━━━━━━", ""]
+    lines.append("_RSI < 35 with a bullish EMA structure (EMA50 > EMA200, price > EMA50, or EMA9 > EMA21):_")
+    lines.append("")
+
+    if hits:
+        for h in hits:
+            lines.append(h["line"])
+            lines.append("")
+    else:
+        lines.append("No stocks currently meet the criteria (RSI < 35 with bullish structure).")
+        lines.append("Market may be in a strong uptrend with no meaningful dips yet.")
+
+    if errors:
+        lines.append(f"_⚠️ {len(errors)} ticker(s) could not be fetched._")
+
+    lines.append("_Tap any ticker for the full analysis._")
+    lines.append("⚠️ _Not financial advice. Mean-reversion setups carry risk — always use a stop loss._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1077,6 +1182,7 @@ def main():
     app.add_handler(CommandHandler("movers", movers_handler))
     app.add_handler(CommandHandler("summary", summary_handler))
     app.add_handler(CommandHandler("gainers52w", gainers52w_handler))
+    app.add_handler(CommandHandler("oversold", oversold_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
