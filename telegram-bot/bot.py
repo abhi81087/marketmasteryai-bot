@@ -55,6 +55,9 @@ Send me any stock ticker symbol to get a full technical analysis.
   /top india         — Top signals from Indian stocks only
   /compare AAPL TSLA  — Side-by-side comparison of 2–6 stocks
   /sentiment AAPL     — News sentiment summary for a stock
+  /movers             — Today's top gainers & losers
+  /movers us          — US gainers & losers only
+  /movers india       — Indian gainers & losers only
 
 *Other commands:*
   /start — Welcome message
@@ -442,6 +445,89 @@ async def compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def movers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    arg = " ".join(context.args).lower().strip() if context.args else ""
+
+    if arg == "us":
+        tickers = TOP_US
+        label = "🇺🇸 US Stocks"
+    elif arg in ("india", "in"):
+        tickers = TOP_INDIA
+        label = "🇮🇳 Indian Stocks"
+    else:
+        tickers = TOP_US + TOP_INDIA
+        label = "🌍 US + Indian Stocks"
+
+    msg = await update.message.reply_text(
+        f"🔍 Fetching movers from {len(tickers)} popular stocks...",
+        parse_mode="Markdown",
+    )
+
+    results = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            results.append({
+                "ticker": ticker,
+                "price": data["last_close"],
+                "chg": data["change_pct"],
+                "rsi": data["rsi"],
+                "signal": data["signal"]["action"],
+                "volume_ratio": data["volume"]["volume_ratio"],
+            })
+        except Exception as e:
+            logger.warning(f"Movers fetch error for {ticker}: {e}")
+            errors.append(ticker)
+
+    if not results:
+        await msg.edit_text("❌ Could not fetch data. Please try again later.", parse_mode="Markdown")
+        return
+
+    results.sort(key=lambda x: x["chg"], reverse=True)
+    gainers = results[:5]
+    losers = list(reversed(results[-5:]))
+
+    def sig_icon(sig):
+        if "STRONG BUY" in sig: return "🟢🟢"
+        if "BUY" in sig: return "🟢"
+        if "STRONG SELL" in sig: return "🔴🔴"
+        if "SELL" in sig: return "🔴"
+        return "🟡"
+
+    def vol_tag(ratio):
+        if ratio >= 2.0: return " 🔥Vol"
+        if ratio >= 1.5: return " ⬆️Vol"
+        return ""
+
+    lines = [f"📈📉 *Top Movers — {label}*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    lines.append("🚀 *Top Gainers:*")
+    for r in gainers:
+        chg_str = f"+{r['chg']}%" if r["chg"] >= 0 else f"{r['chg']}%"
+        lines.append(
+            f"  {sig_icon(r['signal'])} *{r['ticker']}* `${r['price']}` `{chg_str}` | RSI `{r['rsi']}`{vol_tag(r['volume_ratio'])}"
+        )
+
+    lines.append("")
+    lines.append("💥 *Top Losers:*")
+    for r in losers:
+        chg_str = f"{r['chg']}%"
+        lines.append(
+            f"  {sig_icon(r['signal'])} *{r['ticker']}* `${r['price']}` `{chg_str}` | RSI `{r['rsi']}`{vol_tag(r['volume_ratio'])}"
+        )
+
+    if errors:
+        lines.append(f"\n_⚠️ {len(errors)} ticker(s) could not be fetched._")
+
+    lines.append("")
+    lines.append("_Tap any ticker for the full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def sentiment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if not args:
@@ -658,6 +744,7 @@ def main():
     app.add_handler(CommandHandler("top", top_handler))
     app.add_handler(CommandHandler("compare", compare_handler))
     app.add_handler(CommandHandler("sentiment", sentiment_handler))
+    app.add_handler(CommandHandler("movers", movers_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
