@@ -78,6 +78,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /oversold us          — US stocks only
   /oversold india       — Indian stocks only
   /report AAPL          — Full shareable analysis report for a stock
+  /sector               — Avg RSI & dominant signal by market sector
 
 *Other commands:*
   /start — Welcome message
@@ -1172,6 +1173,123 @@ async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+SECTOR_MAP = {
+    "AAPL":          "💻 Tech",
+    "MSFT":          "💻 Tech",
+    "NVDA":          "💻 Tech",
+    "GOOGL":         "💻 Tech",
+    "AMZN":          "💻 Tech",
+    "META":          "💻 Tech",
+    "AMD":           "💻 Tech",
+    "NFLX":          "🎬 Media",
+    "INTC":          "💻 Tech",
+    "TSLA":          "🚗 Auto / EV",
+    "JPM":           "🏦 Finance",
+    "V":             "🏦 Finance",
+    "MA":            "🏦 Finance",
+    "BAC":           "🏦 Finance",
+    "DIS":           "🎬 Media",
+    "RELIANCE.NS":   "⚡ Energy",
+    "TCS.NS":        "💻 Tech",
+    "INFY.NS":       "💻 Tech",
+    "WIPRO.NS":      "💻 Tech",
+    "HDFCBANK.NS":   "🏦 Finance",
+    "ICICIBANK.NS":  "🏦 Finance",
+    "SBIN.NS":       "🏦 Finance",
+    "AXISBANK.NS":   "🏦 Finance",
+    "KOTAKBANK.NS":  "🏦 Finance",
+    "BAJFINANCE.NS": "🏦 Finance",
+    "LT.NS":         "🏗️ Infra",
+    "MARUTI.NS":     "🚗 Auto / EV",
+    "TATAMOTORS.NS": "🚗 Auto / EV",
+    "SUNPHARMA.NS":  "💊 Pharma",
+    "ADANIENT.NS":   "⚡ Energy",
+}
+
+SIGNAL_ORDER = ["STRONG BUY", "BUY", "HOLD / NEUTRAL", "SELL", "STRONG SELL"]
+
+
+async def sector_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    tickers = TOP_US + TOP_INDIA
+    msg = await update.message.reply_text(
+        f"🔍 Scanning {len(tickers)} stocks across sectors...", parse_mode="Markdown"
+    )
+
+    sectors: dict[str, list] = {}
+    errors = []
+
+    for ticker in tickers:
+        sector = SECTOR_MAP.get(ticker, "🔹 Other")
+        try:
+            data = analyze(ticker)
+            sectors.setdefault(sector, []).append({
+                "ticker": ticker,
+                "rsi": data["rsi"],
+                "signal": data["signal"]["action"],
+                "score": data["signal"]["score"],
+                "chg": data["change_pct"],
+                "breakout_up": data["breakout"]["breakout_up"],
+                "breakout_down": data["breakout"]["breakout_down"],
+            })
+        except Exception as e:
+            logger.warning(f"Sector scan error for {ticker}: {e}")
+            errors.append(ticker)
+
+    def dominant_signal(stocks: list) -> str:
+        counts = {}
+        for s in stocks:
+            counts[s["signal"]] = counts.get(s["signal"], 0) + 1
+        return max(counts, key=lambda x: counts[x])
+
+    def sector_icon(sig: str) -> str:
+        if "STRONG BUY" in sig:   return "🟢🟢"
+        if "BUY" in sig:           return "🟢"
+        if "STRONG SELL" in sig:  return "🔴🔴"
+        if "SELL" in sig:          return "🔴"
+        return "🟡"
+
+    sector_summaries = []
+    for sector, stocks in sectors.items():
+        avg_rsi = round(sum(s["rsi"] for s in stocks) / len(stocks), 1)
+        avg_chg = round(sum(s["chg"] for s in stocks) / len(stocks), 2)
+        dom_sig = dominant_signal(stocks)
+        avg_score = round(sum(s["score"] for s in stocks) / len(stocks), 1)
+        breakouts = sum(1 for s in stocks if s["breakout_up"] or s["breakout_down"])
+        sector_summaries.append({
+            "sector": sector,
+            "avg_rsi": avg_rsi,
+            "avg_chg": avg_chg,
+            "dom_sig": dom_sig,
+            "avg_score": avg_score,
+            "count": len(stocks),
+            "breakouts": breakouts,
+            "stocks": stocks,
+        })
+
+    sector_summaries.sort(key=lambda x: -x["avg_score"])
+
+    lines = ["🏭 *Sector Overview*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    for sec in sector_summaries:
+        icon = sector_icon(sec["dom_sig"])
+        chg_str = f"{'+' if sec['avg_chg'] >= 0 else ''}{sec['avg_chg']}%"
+        brk_tag = f" | 🚨 {sec['breakouts']} breakout(s)" if sec["breakouts"] else ""
+        ticker_list = " ".join(f"`{s['ticker']}`" for s in sorted(sec["stocks"], key=lambda x: -x["score"]))
+
+        lines.append(f"{icon} *{sec['sector']}* ({sec['count']} stocks)")
+        lines.append(f"  Dominant: `{sec['dom_sig']}` | Avg RSI: `{sec['avg_rsi']}` | Avg Chg: `{chg_str}`{brk_tag}")
+        lines.append(f"  Tickers: {ticker_list}")
+        lines.append("")
+
+    if errors:
+        lines.append(f"_⚠️ {len(errors)} ticker(s) could not be fetched._")
+
+    lines.append("_Tap any ticker for a full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1334,6 +1452,7 @@ def main():
     app.add_handler(CommandHandler("gainers52w", gainers52w_handler))
     app.add_handler(CommandHandler("oversold", oversold_handler))
     app.add_handler(CommandHandler("report", report_handler))
+    app.add_handler(CommandHandler("sector", sector_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
