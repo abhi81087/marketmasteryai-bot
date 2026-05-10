@@ -1,45 +1,54 @@
-# [Project name]
+# Stock Analysis Telegram Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A Telegram bot that performs full technical analysis on any stock ticker and returns buy/sell signals, RSI, EMA, MACD, Bollinger Bands, volume analysis, breakout alerts, and swing trade setups.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `cd telegram-bot && python bot.py` — run the Telegram bot (via the "Stock Analysis Telegram Bot" workflow)
+- Required secret: `TELEGRAM_BOT_TOKEN` — from @BotFather on Telegram
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Python 3.11
+- python-telegram-bot v20+ (async polling)
+- yfinance — market data from Yahoo Finance
+- pandas + numpy — indicator computations (no ta-lib dependency)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `telegram-bot/bot.py` — main bot entry point, command + message handlers
+- `telegram-bot/analysis.py` — all technical indicators (RSI, EMA, MACD, Bollinger, ATR, OBV, breakout, swing setup)
+- `telegram-bot/formatter.py` — formats analysis dict into a Telegram Markdown message
+- `telegram-bot/requirements.txt` — Python dependencies
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- All indicators implemented from scratch using pandas/numpy — no ta-lib required, avoids C-library install issues
+- Async handlers using python-telegram-bot v20+ ApplicationBuilder pattern
+- Swing trade stop loss / targets derived from ATR (14) for dynamic risk sizing
+- Breakout detection uses rolling 20-day high/low + volume surge threshold (1.5x avg)
+- Signal score combines RSI zone, EMA cross, MACD cross, and price vs EMA21
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+Users send any ticker symbol (e.g. `AAPL`, `TSLA`, `TCS.NS`) and receive:
+- RSI (14) with zone labeling
+- EMA 9 / 21 / 50 / 200
+- MACD + signal + histogram
+- Bollinger Bands (20, 2σ)
+- Volume analysis + OBV trend
+- Breakout / Breakdown alerts (20-day S/R with volume confirmation)
+- Swing trade setup: direction, stop loss, Target 1 & 2 (ATR-based)
+- Overall Buy / Sell / Hold signal with reasoning
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- Python bot (not Node.js)
+- No external TA library required — pure pandas/numpy implementation
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Indian stocks need `.NS` suffix (NSE) or `.BO` (BSE), e.g. `TCS.NS`, `RELIANCE.NS`
+- Nifty 50 index: use `^NSEI`
+- yfinance may rate-limit on rapid repeated requests
+- Always run `pip install -r telegram-bot/requirements.txt` after a fresh environment
