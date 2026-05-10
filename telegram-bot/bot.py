@@ -7,6 +7,7 @@ from analysis import analyze
 from formatter import format_report
 from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlist
 from alerts import set_alert, remove_alert, get_alert, get_all_alerts
+from sentiment import fetch_sentiment
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -52,7 +53,8 @@ Send me any stock ticker symbol to get a full technical analysis.
   /top               — Top signals from popular US + Indian stocks
   /top us            — Top signals from US stocks only
   /top india         — Top signals from Indian stocks only
-  /compare AAPL TSLA — Side-by-side comparison of 2–6 stocks
+  /compare AAPL TSLA  — Side-by-side comparison of 2–6 stocks
+  /sentiment AAPL     — News sentiment summary for a stock
 
 *Other commands:*
   /start — Welcome message
@@ -440,6 +442,70 @@ async def compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def sentiment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/sentiment AAPL`\n\nFetches recent news headlines and gives a bullish/bearish/neutral sentiment summary.",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    msg = await update.message.reply_text(
+        f"📰 Fetching news sentiment for `{ticker}`...", parse_mode="Markdown"
+    )
+
+    try:
+        s = fetch_sentiment(ticker)
+    except Exception as e:
+        logger.exception(f"Sentiment error for {ticker}: {e}")
+        await msg.edit_text(
+            f"⚠️ Could not fetch news for `{ticker}`. Try again later.", parse_mode="Markdown"
+        )
+        return
+
+    overall = s["overall"]
+    if overall == "BULLISH":
+        overall_icon = "🟢 BULLISH"
+    elif overall == "BEARISH":
+        overall_icon = "🔴 BEARISH"
+    else:
+        overall_icon = "🟡 NEUTRAL"
+
+    lines = [
+        f"📰 *News Sentiment — `{ticker}`*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"Overall: *{overall_icon}*",
+        f"Articles scanned: `{s['total']}`",
+        f"🟢 Bullish: `{s['bullish']}`  🔴 Bearish: `{s['bearish']}`  🟡 Neutral: `{s['neutral']}`",
+        "",
+    ]
+
+    if s["headlines"]:
+        lines.append("*Recent Headlines:*")
+        lines.append("")
+        for h in s["headlines"]:
+            if h["score"] > 0:
+                icon = "🟢"
+            elif h["score"] < 0:
+                icon = "🔴"
+            else:
+                icon = "🟡"
+            title = h["title"]
+            if len(title) > 90:
+                title = title[:87] + "..."
+            lines.append(f"{icon} {title}")
+    else:
+        lines.append("_No recent headlines found for this ticker._")
+
+    lines.append("")
+    lines.append("⚠️ _Sentiment is keyword-based. Always verify news independently._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def top_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = " ".join(context.args).lower().strip() if context.args else ""
 
@@ -591,6 +657,7 @@ def main():
     app.add_handler(CommandHandler("scan", scan_handler))
     app.add_handler(CommandHandler("top", top_handler))
     app.add_handler(CommandHandler("compare", compare_handler))
+    app.add_handler(CommandHandler("sentiment", sentiment_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
