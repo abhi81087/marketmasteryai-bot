@@ -49,9 +49,10 @@ Send me any stock ticker symbol to get a full technical analysis.
   /cancelalert       — Cancel your daily alert
 
 *Market commands:*
-  /top           — Top signals from popular US + Indian stocks
-  /top us        — Top signals from US stocks only
-  /top india     — Top signals from Indian stocks only
+  /top               — Top signals from popular US + Indian stocks
+  /top us            — Top signals from US stocks only
+  /top india         — Top signals from Indian stocks only
+  /compare AAPL TSLA — Side-by-side comparison of 2–6 stocks
 
 *Other commands:*
   /start — Welcome message
@@ -352,6 +353,93 @@ SIGNAL_RANK = {
 }
 
 
+async def compare_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "Usage: `/compare AAPL TSLA MSFT` (2–6 tickers)\n\nCompares signal, RSI, EMA trend, MACD, and swing direction side by side.",
+            parse_mode="Markdown",
+        )
+        return
+
+    tickers = [a.upper().strip() for a in args[:6]]
+
+    msg = await update.message.reply_text(
+        f"🔍 Comparing {', '.join(f'`{t}`' for t in tickers)}...",
+        parse_mode="Markdown",
+    )
+
+    rows = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            sig = data["signal"]["action"]
+            if "STRONG BUY" in sig:
+                sig_icon = "🟢🟢"
+            elif "BUY" in sig:
+                sig_icon = "🟢"
+            elif "STRONG SELL" in sig:
+                sig_icon = "🔴🔴"
+            elif "SELL" in sig:
+                sig_icon = "🔴"
+            else:
+                sig_icon = "🟡"
+
+            ema_trend = "↑ Bull" if data["ema9"] > data["ema21"] else "↓ Bear"
+            macd_trend = "↑" if data["macd"] > data["macd_signal"] else "↓"
+            bb_pos = (
+                "Above" if data["last_close"] > data["bb_upper"]
+                else "Below" if data["last_close"] < data["bb_lower"]
+                else "Inside"
+            )
+            brk = data["breakout"]
+            brk_tag = "↑BRK" if brk["breakout_up"] else ("↓BRK" if brk["breakout_down"] else "—")
+            chg = data["change_pct"]
+            chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+
+            rows.append({
+                "ticker": ticker,
+                "price": data["last_close"],
+                "chg": chg_str,
+                "signal": f"{sig_icon} {sig}",
+                "rsi": data["rsi"],
+                "ema_trend": ema_trend,
+                "macd": macd_trend,
+                "bb": bb_pos,
+                "swing": data["swing"]["direction"],
+                "brk": brk_tag,
+            })
+        except Exception as e:
+            logger.warning(f"Compare error for {ticker}: {e}")
+            errors.append(ticker)
+
+    if not rows:
+        await msg.edit_text("❌ Could not fetch data for any of the tickers provided.", parse_mode="Markdown")
+        return
+
+    lines = [f"📊 *Stock Comparison*", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    for r in rows:
+        lines.append(f"*{r['ticker']}* — `${r['price']}` ({r['chg']})")
+        lines.append(f"  Signal:   {r['signal']}")
+        lines.append(f"  RSI:      `{r['rsi']}`")
+        lines.append(f"  EMA:      `{r['ema_trend']}`  |  MACD: `{r['macd']}`")
+        lines.append(f"  BB:       `{r['bb']}`  |  Swing: `{r['swing']}`")
+        lines.append(f"  Breakout: `{r['brk']}`")
+        lines.append("")
+
+    if errors:
+        lines.append(f"_⚠️ Could not fetch: {', '.join(errors)}_")
+        lines.append("")
+
+    lines.append("_Tap a ticker for its full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def top_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     arg = " ".join(context.args).lower().strip() if context.args else ""
 
@@ -502,6 +590,7 @@ def main():
     app.add_handler(CommandHandler("clear", clear_handler))
     app.add_handler(CommandHandler("scan", scan_handler))
     app.add_handler(CommandHandler("top", top_handler))
+    app.add_handler(CommandHandler("compare", compare_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
