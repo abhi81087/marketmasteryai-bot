@@ -77,6 +77,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   /oversold             — RSI dip-buy setups with bullish EMA structure
   /oversold us          — US stocks only
   /oversold india       — Indian stocks only
+  /report AAPL          — Full shareable analysis report for a stock
 
 *Other commands:*
   /start — Welcome message
@@ -1022,6 +1023,155 @@ async def oversold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def report_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/report AAPL`\n\nGenerates a full shareable analysis report you can forward to others.",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    msg = await update.message.reply_text(
+        f"📄 Generating full report for `{ticker}`...", parse_mode="Markdown"
+    )
+
+    try:
+        data = analyze(ticker)
+    except Exception as e:
+        logger.exception(f"Report error for {ticker}: {e}")
+        await msg.edit_text(f"❌ Could not fetch data for `{ticker}`.", parse_mode="Markdown")
+        return
+
+    try:
+        sent = fetch_sentiment(ticker)
+    except Exception:
+        sent = {"overall": "NEUTRAL", "bullish": 0, "bearish": 0, "neutral": 0, "total": 0, "headlines": []}
+
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+
+    price = data["last_close"]
+    chg = data["change_pct"]
+    chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+    sig = data["signal"]["action"]
+    rsi = data["rsi"]
+    swing = data["swing"]
+    brk = data["breakout"]
+    vol = data["volume"]
+    bb_upper = data["bb_upper"]
+    bb_mid = data["bb_mid"]
+    bb_lower = data["bb_lower"]
+
+    if "STRONG BUY" in sig:   sig_icon = "🟢🟢"
+    elif "BUY" in sig:         sig_icon = "🟢"
+    elif "STRONG SELL" in sig: sig_icon = "🔴🔴"
+    elif "SELL" in sig:        sig_icon = "🔴"
+    else:                      sig_icon = "🟡"
+
+    if rsi < 30:   rsi_zone = "Oversold"
+    elif rsi < 45: rsi_zone = "Below mid"
+    elif rsi < 55: rsi_zone = "Neutral"
+    elif rsi < 70: rsi_zone = "Above mid"
+    else:           rsi_zone = "Overbought"
+
+    ema_trend = "Bullish" if data["ema9"] > data["ema21"] else "Bearish"
+    macd_trend = "Bullish" if data["macd"] > data["macd_signal"] else "Bearish"
+    news_icon = {"BULLISH": "🟢", "BEARISH": "🔴"}.get(sent["overall"], "🟡")
+
+    if price > bb_upper:   bb_pos = "Above upper band ⚠️"
+    elif price < bb_lower: bb_pos = "Below lower band ⚠️"
+    else:                   bb_pos = "Within bands ✅"
+
+    if brk["breakout_up"]:   brk_str = "🚨 BREAKOUT UP — 20-day resistance cleared with volume"
+    elif brk["breakout_down"]: brk_str = "💥 BREAKDOWN — 20-day support broken with volume"
+    else:                       brk_str = f"No active breakout | S: ${brk['support']} | R: ${brk['resistance']}"
+
+    reasons_str = "\n".join(f"     • {r}" for r in data["signal"]["reasons"])
+
+    top_headlines = ""
+    if sent["headlines"]:
+        headline_lines = []
+        for h in sent["headlines"][:4]:
+            icon = "🟢" if h["score"] > 0 else ("🔴" if h["score"] < 0 else "🟡")
+            title = h["title"][:80] + ("..." if len(h["title"]) > 80 else "")
+            headline_lines.append(f"  {icon} {title}")
+        top_headlines = "\n".join(headline_lines)
+    else:
+        top_headlines = "  No recent headlines found."
+
+    lines = [
+        f"╔══════════════════════════╗",
+        f"  📊 STOCK ANALYSIS REPORT",
+        f"  {data['name']} ({ticker})",
+        f"  {now}",
+        f"╚══════════════════════════╝",
+        "",
+        f"💵 *PRICE*",
+        f"  Current:  `${price}` ({chg_str})",
+        f"  Signal:   {sig_icon} *{sig}*",
+        "",
+        f"  Reasons:",
+        f"{reasons_str}",
+        "",
+        "─────────────────────────",
+        f"📉 *RSI (14)*",
+        f"  Value: `{rsi}` — {rsi_zone}",
+        "",
+        "─────────────────────────",
+        f"📐 *EMA LEVELS*",
+        f"  EMA 9:   `${data['ema9']}`",
+        f"  EMA 21:  `${data['ema21']}`",
+        f"  EMA 50:  `${data['ema50']}`",
+        f"  EMA 200: `${data['ema200']}`",
+        f"  Trend:   `{ema_trend}`",
+        "",
+        "─────────────────────────",
+        f"📊 *MACD (12 / 26 / 9)*",
+        f"  MACD:    `{data['macd']}`",
+        f"  Signal:  `{data['macd_signal']}`",
+        f"  Hist:    `{data['macd_hist']}`",
+        f"  Trend:   `{macd_trend}`",
+        "",
+        "─────────────────────────",
+        f"📏 *BOLLINGER BANDS (20)*",
+        f"  Upper: `${bb_upper}` | Mid: `${bb_mid}` | Lower: `${bb_lower}`",
+        f"  Position: {bb_pos}",
+        "",
+        "─────────────────────────",
+        f"📦 *VOLUME*",
+        f"  Last:      `{vol['last_volume']:,}`",
+        f"  Avg (20d): `{vol['avg_volume_20d']:,}`",
+        f"  Ratio:     `{vol['volume_ratio']}x`",
+        f"  OBV:       `{vol['obv_trend']}`",
+        "",
+        "─────────────────────────",
+        f"🚨 *BREAKOUT / S\\&R*",
+        f"  {brk_str}",
+        "",
+        "─────────────────────────",
+        f"🏹 *SWING TRADE SETUP*",
+        f"  Direction:  `{swing['direction']}` (conf. `{swing['confidence']}%`)",
+        f"  ATR (14):   `${swing['atr']}`",
+        f"  Stop Loss:  `${swing['stop_loss']}`",
+        f"  Target 1:   `${swing['target1']}`",
+        f"  Target 2:   `${swing['target2']}`",
+        "",
+        "─────────────────────────",
+        f"📰 *NEWS SENTIMENT*",
+        f"  Overall: {news_icon} {sent['overall']} "
+        f"({sent['bullish']}↑ {sent['bearish']}↓ / {sent['total']} articles)",
+        f"{top_headlines}",
+        "",
+        "═════════════════════════",
+        f"⚠️ _For educational purposes only._",
+        f"_Not financial advice. Generated by Stock Analysis Bot._",
+    ]
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1183,6 +1333,7 @@ def main():
     app.add_handler(CommandHandler("summary", summary_handler))
     app.add_handler(CommandHandler("gainers52w", gainers52w_handler))
     app.add_handler(CommandHandler("oversold", oversold_handler))
+    app.add_handler(CommandHandler("report", report_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
