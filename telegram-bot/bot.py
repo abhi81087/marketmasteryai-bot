@@ -8,6 +8,7 @@ from formatter import format_report
 from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlist
 from alerts import set_alert, remove_alert, get_alert, get_all_alerts
 from sentiment import fetch_sentiment
+from journal import add_trade, get_trades, delete_trade, get_pnl_stats
 from price_alerts import (
     add_price_alert, get_user_alerts, remove_price_alert,
     remove_triggered_alert, get_all_price_alerts,
@@ -81,6 +82,12 @@ Send me any stock ticker symbol to get a full technical analysis.
   /sector               — Avg RSI & dominant signal by market sector
   /heatmap              — Colour-coded signal grid of all 30 stocks
   /risk AAPL 10000      — Position sizing & risk/reward for your capital
+
+*Trade journal:*
+  /journal AAPL long 150 165 10 — Log a completed trade
+  /trades                        — View your trade history
+  /pnl                           — P&L stats (win rate, profit factor)
+  /deltrade 3                    — Delete trade by ID
 
 *Other commands:*
   /start — Welcome message
@@ -1490,6 +1497,158 @@ async def risk_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
+async def journal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 4:
+        await update.message.reply_text(
+            "Usage: `/journal TICKER DIRECTION ENTRY EXIT [SHARES]`\n\n"
+            "Examples:\n"
+            "  `/journal AAPL long 150 165 10` — 10 shares AAPL long\n"
+            "  `/journal TSLA short 280 260` — 1 share TSLA short\n\n"
+            "Direction: `long` or `short`",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker    = args[0].upper().strip()
+    direction = args[1].lower().strip()
+    if direction not in ("long", "short"):
+        await update.message.reply_text(
+            "❌ Direction must be `long` or `short`.\n\nExample: `/journal AAPL long 150 165`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        entry  = float(args[2].replace("$", "").replace(",", ""))
+        exit_p = float(args[3].replace("$", "").replace(",", ""))
+        shares = float(args[4].replace(",", "")) if len(args) >= 5 else 1.0
+        if entry <= 0 or exit_p <= 0 or shares <= 0:
+            raise ValueError()
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid numbers. Example: `/journal AAPL long 150 165 10`", parse_mode="Markdown"
+        )
+        return
+
+    user_id = update.effective_user.id
+    trade   = add_trade(user_id, ticker, direction, entry, exit_p, shares)
+
+    won_icon = "✅ Win" if trade["won"] else "❌ Loss"
+    pnl_str  = f"+${trade['pnl']:,.2f}" if trade["pnl"] >= 0 else f"-${abs(trade['pnl']):,.2f}"
+    dir_icon = "⬆️" if trade["direction"] == "LONG" else "⬇️"
+
+    await update.message.reply_text(
+        f"📒 *Trade logged!* #{trade['id']}\n\n"
+        f"{dir_icon} *{ticker}* {trade['direction']} | {trade['shares']} shares\n"
+        f"  Entry: `${trade['entry']}` → Exit: `${trade['exit']}`\n"
+        f"  P&L: `{pnl_str}` ({trade['pnl_pct']}%) — {won_icon}\n\n"
+        f"Use /trades to see your history or /pnl for stats.",
+        parse_mode="Markdown",
+    )
+
+
+async def trades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    trades  = get_trades(user_id)
+
+    if not trades:
+        await update.message.reply_text(
+            "📒 No trades logged yet.\n\nUse `/journal AAPL long 150 165 10` to log one.",
+            parse_mode="Markdown",
+        )
+        return
+
+    recent = list(reversed(trades[-20:]))
+    lines  = [f"📒 *Trade Journal* ({len(trades)} total)", "━━━━━━━━━━━━━━━━━━━━", ""]
+
+    for t in recent:
+        won_icon = "✅" if t["won"] else "❌"
+        pnl_str  = f"+${t['pnl']:,.2f}" if t["pnl"] >= 0 else f"-${abs(t['pnl']):,.2f}"
+        dir_icon = "⬆️" if t["direction"] == "LONG" else "⬇️"
+        lines.append(
+            f"{won_icon} #{t['id']} {dir_icon} *{t['ticker']}* | `{t['date']}`\n"
+            f"   `${t['entry']}` → `${t['exit']}` × {t['shares']} sh → `{pnl_str}` ({t['pnl_pct']}%)"
+        )
+        lines.append("")
+
+    lines.append("_Use /pnl for statistics or `/deltrade ID` to remove._")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def pnl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    stats   = get_pnl_stats(user_id)
+
+    if not stats:
+        await update.message.reply_text(
+            "📊 No trades logged yet.\n\nUse `/journal AAPL long 150 165 10` to log one.",
+            parse_mode="Markdown",
+        )
+        return
+
+    total_icon = "🟢" if stats["total_pnl"] >= 0 else "🔴"
+    pnl_str    = f"+${stats['total_pnl']:,.2f}" if stats["total_pnl"] >= 0 else f"-${abs(stats['total_pnl']):,.2f}"
+    pf_str     = f"{stats['profit_factor']}" if stats["profit_factor"] != float("inf") else "∞"
+    best       = stats["best"]
+    worst      = stats["worst"]
+    best_str   = f"+${best['pnl']:,.2f}" if best["pnl"] >= 0 else f"-${abs(best['pnl']):,.2f}"
+    worst_str  = f"+${worst['pnl']:,.2f}" if worst["pnl"] >= 0 else f"-${abs(worst['pnl']):,.2f}"
+
+    lines = [
+        "📊 *P&L Statistics*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"{total_icon} *Total P&L:* `{pnl_str}`",
+        f"📈 *Win Rate:*  `{stats['win_rate']}%` ({stats['wins']}W / {stats['losses']}L / {stats['total']} trades)",
+        f"⚖️ *Profit Factor:* `{pf_str}`",
+        "",
+        "─────────────────────────",
+        f"✅ *Avg Win:*  `+${stats['avg_win']:,.2f}`",
+        f"❌ *Avg Loss:* `-${abs(stats['avg_loss']):,.2f}`",
+        "",
+        "─────────────────────────",
+        f"🏆 *Best Trade:*  #{best['id']} {best['ticker']} `{best_str}` ({best['pnl_pct']}%)",
+        f"💥 *Worst Trade:* #{worst['id']} {worst['ticker']} `{worst_str}` ({worst['pnl_pct']}%)",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ]
+
+    if stats["win_rate"] >= 60 and stats["total_pnl"] > 0:
+        lines.append("💡 _Solid performance — keep your discipline and stick to your stop losses._")
+    elif stats["win_rate"] < 40:
+        lines.append("💡 _Win rate is low — review your entry criteria and consider tighter setups._")
+    elif stats["total_pnl"] < 0:
+        lines.append("💡 _Positive win rate but net loss — check if your losses are larger than your wins._")
+    else:
+        lines.append("💡 _Consistent results — keep journaling to track improvements over time._")
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def deltrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/deltrade 3`\n\nUse /trades to see your trade IDs.", parse_mode="Markdown"
+        )
+        return
+    try:
+        trade_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Provide a valid trade ID number. Use /trades to see them.", parse_mode="Markdown")
+        return
+
+    user_id = update.effective_user.id
+    removed = delete_trade(user_id, trade_id)
+    if removed:
+        await update.message.reply_text(f"🗑️ Trade #{trade_id} deleted.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(
+            f"⚠️ No trade found with ID #{trade_id}. Use /trades to see your entries.", parse_mode="Markdown"
+        )
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -1655,6 +1814,10 @@ def main():
     app.add_handler(CommandHandler("sector", sector_handler))
     app.add_handler(CommandHandler("heatmap", heatmap_handler))
     app.add_handler(CommandHandler("risk", risk_handler))
+    app.add_handler(CommandHandler("journal", journal_handler))
+    app.add_handler(CommandHandler("trades", trades_handler))
+    app.add_handler(CommandHandler("pnl", pnl_handler))
+    app.add_handler(CommandHandler("deltrade", deltrade_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
