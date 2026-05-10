@@ -8,6 +8,10 @@ from formatter import format_report
 from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlist
 from alerts import set_alert, remove_alert, get_alert, get_all_alerts
 from sentiment import fetch_sentiment
+from price_alerts import (
+    add_price_alert, get_user_alerts, remove_price_alert,
+    remove_triggered_alert, get_all_price_alerts,
+)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -59,6 +63,12 @@ Send me any stock ticker symbol to get a full technical analysis.
   /movers us          — US gainers & losers only
   /movers india       — Indian gainers & losers only
   /summary AAPL       — Combined technicals + sentiment trade brief
+
+*Price alert commands:*
+  /alert AAPL above 220 — Notify when AAPL crosses above $220
+  /alert AAPL below 190 — Notify when AAPL drops below $190
+  /alerts               — View all your active price alerts
+  /delalert 1           — Cancel price alert by ID
 
 *Other commands:*
   /start — Welcome message
@@ -801,6 +811,120 @@ async def analyze_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ──────────────────────────────────────────────
+# Price alert job + handlers
+# ──────────────────────────────────────────────
+
+async def check_price_alerts(context):
+    all_alerts = get_all_price_alerts()
+    for user_id_str, alerts in all_alerts.items():
+        user_id = int(user_id_str)
+        for alert in list(alerts):
+            ticker = alert["ticker"]
+            condition = alert["condition"]
+            target = alert["target"]
+            chat_id = alert["chat_id"]
+            alert_id = alert["id"]
+            try:
+                import yfinance as yf
+                price = yf.Ticker(ticker).fast_info.get("last_price") or yf.Ticker(ticker).history(period="1d")["Close"].iloc[-1]
+                price = round(float(price), 2)
+                triggered = (condition == "above" and price >= target) or (condition == "below" and price <= target)
+                if triggered:
+                    arrow = "⬆️" if condition == "above" else "⬇️"
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"🔔 *Price Alert Triggered!*\n\n"
+                            f"{arrow} *{ticker}* is now `${price}` — "
+                            f"{'above' if condition == 'above' else 'below'} your target of `${target}`.\n\n"
+                            f"_Send `{ticker}` for the full analysis._"
+                        ),
+                        parse_mode="Markdown",
+                    )
+                    remove_triggered_alert(user_id, alert_id)
+                    logger.info(f"Price alert triggered: {ticker} {condition} {target} for user {user_id}")
+            except Exception as e:
+                logger.warning(f"Price alert check failed for {ticker} (user {user_id}): {e}")
+
+
+async def alert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) < 3:
+        await update.message.reply_text(
+            "Usage: `/alert AAPL above 220` or `/alert TSLA below 190`\n\n"
+            "Alerts fire once when the price crosses your target.",
+            parse_mode="Markdown",
+        )
+        return
+
+    ticker = args[0].upper().strip()
+    condition = args[1].lower().strip()
+    if condition not in ("above", "below"):
+        await update.message.reply_text(
+            "❌ Condition must be `above` or `below`.\n\nExample: `/alert AAPL above 220`",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        target = float(args[2].replace("$", "").replace(",", ""))
+    except ValueError:
+        await update.message.reply_text("❌ Invalid price. Example: `/alert AAPL above 220`", parse_mode="Markdown")
+        return
+
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    alert_id = add_price_alert(user_id, chat_id, ticker, condition, target)
+
+    arrow = "⬆️" if condition == "above" else "⬇️"
+    await update.message.reply_text(
+        f"🔔 Alert set! #{alert_id}\n\n"
+        f"{arrow} You'll be notified when *{ticker}* goes *{condition}* `${target}`.\n\n"
+        f"Checked every 15 minutes. Use /alerts to view all your alerts.",
+        parse_mode="Markdown",
+    )
+
+
+async def list_alerts_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    alerts = get_user_alerts(user_id)
+    if not alerts:
+        await update.message.reply_text(
+            "🔕 You have no active price alerts.\n\nUse `/alert AAPL above 220` to set one.",
+            parse_mode="Markdown",
+        )
+        return
+
+    lines = ["🔔 *Your Price Alerts:*", ""]
+    for a in alerts:
+        arrow = "⬆️" if a["condition"] == "above" else "⬇️"
+        lines.append(f"  #{a['id']} — {arrow} *{a['ticker']}* {a['condition']} `${a['target']}`")
+    lines.append("")
+    lines.append("Use `/delalert <id>` to cancel an alert.")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def delalert_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: `/delalert 1`\n\nUse /alerts to see your alert IDs.", parse_mode="Markdown")
+        return
+
+    try:
+        alert_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Please provide a valid alert ID number. Use /alerts to see them.", parse_mode="Markdown")
+        return
+
+    user_id = update.effective_user.id
+    removed = remove_price_alert(user_id, alert_id)
+    if removed:
+        await update.message.reply_text(f"✅ Price alert #{alert_id} has been cancelled.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"⚠️ No alert found with ID #{alert_id}. Use /alerts to see your active alerts.", parse_mode="Markdown")
+
+
+# ──────────────────────────────────────────────
 # Startup: restore saved alerts
 # ──────────────────────────────────────────────
 
@@ -821,6 +945,8 @@ async def restore_alerts(app):
             logger.warning(f"Could not restore alert for user {user_id_str}: {e}")
     if count:
         logger.info(f"Restored {count} daily alert(s).")
+
+    app.job_queue.run_repeating(check_price_alerts, interval=900, first=30, name="price_alert_checker")
 
 
 # ──────────────────────────────────────────────
@@ -847,6 +973,9 @@ def main():
     app.add_handler(CommandHandler("sentiment", sentiment_handler))
     app.add_handler(CommandHandler("movers", movers_handler))
     app.add_handler(CommandHandler("summary", summary_handler))
+    app.add_handler(CommandHandler("alert", alert_handler))
+    app.add_handler(CommandHandler("alerts", list_alerts_handler))
+    app.add_handler(CommandHandler("delalert", delalert_handler))
     app.add_handler(CommandHandler("setalert", setalert_handler))
     app.add_handler(CommandHandler("myalert", myalert_handler))
     app.add_handler(CommandHandler("cancelalert", cancelalert_handler))
