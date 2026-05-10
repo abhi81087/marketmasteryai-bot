@@ -4,6 +4,7 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from analysis import analyze
 from formatter import format_report
+from watchlist import get_watchlist, add_tickers, remove_tickers, clear_watchlist
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -21,8 +22,7 @@ Send me any stock ticker symbol to get a full technical analysis.
   `TSLA` — Tesla
   `RELIANCE.NS` — Reliance (NSE)
   `TCS.NS` — TCS (NSE)
-  `NIFTY50` — Nifty 50 Index
-  `^NSEI` — Nifty 50 (Yahoo Finance format)
+  `^NSEI` — Nifty 50 Index
 
 *What you get:*
   📉 RSI (14) with overbought/oversold zones
@@ -35,9 +35,14 @@ Send me any stock ticker symbol to get a full technical analysis.
   🎯 Buy / Sell / Hold signal
 
 *Commands:*
-  /start — Welcome message
-  /help  — Show this help
-  /about — About this bot
+  /start             — Welcome message
+  /help              — Show this help
+  /about             — About this bot
+  /watchlist         — View your saved tickers
+  /add AAPL TSLA     — Add tickers to watchlist
+  /remove AAPL       — Remove a ticker
+  /scan              — Analyse all watchlist tickers
+  /clear             — Clear your watchlist
 """
 
 ABOUT_TEXT = """
@@ -62,7 +67,9 @@ A technical analysis bot for traders and investors.
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Welcome to *Stock Analysis Bot*!\n\nSend me a stock ticker symbol like `AAPL`, `TSLA`, or `TCS.NS` to get a full technical analysis.",
+        "👋 Welcome to *Stock Analysis Bot*!\n\n"
+        "Send me a stock ticker like `AAPL`, `TSLA`, or `TCS.NS` to get a full technical analysis.\n\n"
+        "Use /watchlist to save your favourite tickers, then /scan to analyse them all at once.",
         parse_mode="Markdown",
     )
 
@@ -73,6 +80,133 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def about_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(ABOUT_TEXT, parse_mode="Markdown")
+
+
+async def watchlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    tickers = get_watchlist(user_id)
+    if not tickers:
+        await update.message.reply_text(
+            "📋 Your watchlist is empty.\n\nUse `/add AAPL TSLA` to add tickers.",
+            parse_mode="Markdown",
+        )
+        return
+    lines = ["📋 *Your Watchlist:*", ""]
+    for i, t in enumerate(tickers, 1):
+        lines.append(f"  {i}. `{t}`")
+    lines.append("")
+    lines.append("Use /scan to analyse all tickers.")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/add AAPL TSLA TCS.NS`", parse_mode="Markdown"
+        )
+        return
+    added, already = add_tickers(user_id, args)
+    lines = []
+    if added:
+        lines.append("✅ Added: " + ", ".join(f"`{t}`" for t in added))
+    if already:
+        lines.append("ℹ️ Already in watchlist: " + ", ".join(f"`{t}`" for t in already))
+    total = get_watchlist(user_id)
+    lines.append(f"\n📋 Watchlist now has *{len(total)}* ticker(s). Use /scan to analyse them.")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def remove_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    args = context.args
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/remove AAPL TSLA`", parse_mode="Markdown"
+        )
+        return
+    removed, not_found = remove_tickers(user_id, args)
+    lines = []
+    if removed:
+        lines.append("🗑️ Removed: " + ", ".join(f"`{t}`" for t in removed))
+    if not_found:
+        lines.append("⚠️ Not found: " + ", ".join(f"`{t}`" for t in not_found))
+    total = get_watchlist(user_id)
+    lines.append(f"\n📋 Watchlist now has *{len(total)}* ticker(s).")
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def clear_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    clear_watchlist(user_id)
+    await update.message.reply_text("🗑️ Your watchlist has been cleared.", parse_mode="Markdown")
+
+
+async def scan_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    tickers = get_watchlist(user_id)
+
+    if not tickers:
+        await update.message.reply_text(
+            "📋 Your watchlist is empty.\n\nUse `/add AAPL TSLA` to add tickers first.",
+            parse_mode="Markdown",
+        )
+        return
+
+    msg = await update.message.reply_text(
+        f"🔍 Scanning *{len(tickers)}* ticker(s)... please wait.",
+        parse_mode="Markdown",
+    )
+
+    results = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            data = analyze(ticker)
+            sig = data["signal"]["action"]
+            rsi = data["rsi"]
+            chg = data["change_pct"]
+            price = data["last_close"]
+            brk = data["breakout"]
+            swing_dir = data["swing"]["direction"]
+
+            if "STRONG BUY" in sig:
+                sig_icon = "🟢🟢"
+            elif "BUY" in sig:
+                sig_icon = "🟢"
+            elif "STRONG SELL" in sig:
+                sig_icon = "🔴🔴"
+            elif "SELL" in sig:
+                sig_icon = "🔴"
+            else:
+                sig_icon = "🟡"
+
+            breakout_tag = ""
+            if brk["breakout_up"]:
+                breakout_tag = " 🚨BRK↑"
+            elif brk["breakout_down"]:
+                breakout_tag = " 💥BRK↓"
+
+            chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+            results.append(
+                f"{sig_icon} *{ticker}* `${price}` ({chg_str}) | RSI `{rsi}` | {swing_dir}{breakout_tag}"
+            )
+        except Exception as e:
+            logger.warning(f"Scan error for {ticker}: {e}")
+            errors.append(f"⚠️ `{ticker}` — could not fetch data")
+
+    lines = [f"📊 *Watchlist Scan — {len(tickers)} ticker(s)*", "━━━━━━━━━━━━━━━━━━━━", ""]
+    lines.extend(results)
+    if errors:
+        lines.append("")
+        lines.extend(errors)
+    lines.append("")
+    lines.append("_Tap any ticker to get the full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
 
 
 async def analyze_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,6 +243,11 @@ def main():
     app.add_handler(CommandHandler("start", start_handler))
     app.add_handler(CommandHandler("help", help_handler))
     app.add_handler(CommandHandler("about", about_handler))
+    app.add_handler(CommandHandler("watchlist", watchlist_handler))
+    app.add_handler(CommandHandler("add", add_handler))
+    app.add_handler(CommandHandler("remove", remove_handler))
+    app.add_handler(CommandHandler("clear", clear_handler))
+    app.add_handler(CommandHandler("scan", scan_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_handler))
 
     logger.info("Bot is starting...")
