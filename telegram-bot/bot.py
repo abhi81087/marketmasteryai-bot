@@ -70,6 +70,11 @@ Send me any stock ticker symbol to get a full technical analysis.
   /alerts               — View all your active price alerts
   /delalert 1           — Cancel price alert by ID
 
+*Screener commands:*
+  /gainers52w           — Stocks near 52-week high with strong momentum
+  /gainers52w us        — US stocks only
+  /gainers52w india     — Indian stocks only
+
 *Other commands:*
   /start — Welcome message
   /help  — Show this help
@@ -814,6 +819,104 @@ async def analyze_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Price alert job + handlers
 # ──────────────────────────────────────────────
 
+async def gainers52w_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import yfinance as yf
+
+    arg = " ".join(context.args).lower().strip() if context.args else ""
+    if arg == "us":
+        tickers = TOP_US
+        label = "🇺🇸 US Stocks"
+    elif arg in ("india", "in"):
+        tickers = TOP_INDIA
+        label = "🇮🇳 Indian Stocks"
+    else:
+        tickers = TOP_US + TOP_INDIA
+        label = "🌍 US + Indian Stocks"
+
+    msg = await update.message.reply_text(
+        f"🔍 Scanning {len(tickers)} stocks for 52-week high setups...",
+        parse_mode="Markdown",
+    )
+
+    hits = []
+    errors = []
+
+    for ticker in tickers:
+        try:
+            stock = yf.Ticker(ticker)
+            fi = stock.fast_info
+            high52 = getattr(fi, "year_high", None)
+            low52 = getattr(fi, "year_low", None)
+            price = getattr(fi, "last_price", None)
+
+            if not high52 or not price:
+                info = stock.info
+                high52 = info.get("fiftyTwoWeekHigh") or high52
+                low52 = info.get("fiftyTwoWeekLow") or low52
+                price = info.get("currentPrice") or info.get("regularMarketPrice") or price
+
+            if not high52 or not price:
+                continue
+
+            price = round(float(price), 2)
+            high52 = round(float(high52), 2)
+            low52 = round(float(low52), 2) if low52 else 0
+
+            pct_from_high = round(((high52 - price) / high52) * 100, 1)
+            range_pct = round(((price - low52) / (high52 - low52)) * 100, 1) if high52 != low52 else 50
+
+            if pct_from_high > 10:
+                continue
+
+            data = analyze(ticker)
+            sig = data["signal"]["action"]
+
+            if sig not in ("BUY", "STRONG BUY"):
+                continue
+
+            sig_icon = "🟢🟢" if "STRONG" in sig else "🟢"
+            vol_ratio = data["volume"]["volume_ratio"]
+            vol_tag = " 🔥Vol" if vol_ratio >= 2.0 else (" ⬆️Vol" if vol_ratio >= 1.5 else "")
+            chg = data["change_pct"]
+            chg_str = f"{'+' if chg >= 0 else ''}{chg}%"
+            brk = data["breakout"]
+            brk_tag = " 🚨BRK↑" if brk["breakout_up"] else ""
+
+            hits.append({
+                "pct_from_high": pct_from_high,
+                "range_pct": range_pct,
+                "line": (
+                    f"{sig_icon} *{ticker}* `${price}` ({chg_str})\n"
+                    f"   📏 `{pct_from_high}%` below 52w high `${high52}` | Range pos: `{range_pct}%`\n"
+                    f"   RSI `{data['rsi']}` | Signal: {sig}{vol_tag}{brk_tag}"
+                ),
+            })
+        except Exception as e:
+            logger.warning(f"52w scan error for {ticker}: {e}")
+            errors.append(ticker)
+
+    hits.sort(key=lambda x: x["pct_from_high"])
+
+    lines = [f"📈 *Near 52-Week Highs — {label}*", "━━━━━━━━━━━━━━━━━━━━", ""]
+    lines.append("_Bullish-signal stocks within 10% of their 52-week high, ranked by proximity:_")
+    lines.append("")
+
+    if hits:
+        for h in hits:
+            lines.append(h["line"])
+            lines.append("")
+    else:
+        lines.append("No stocks currently meet the criteria (within 10% of 52w high + bullish signal).")
+
+    if errors:
+        lines.append(f"_⚠️ {len(errors)} ticker(s) could not be fetched._")
+
+    lines.append("_Tap any ticker for the full analysis._")
+    lines.append("⚠️ _Not financial advice._")
+
+    await msg.edit_text("\n".join(lines), parse_mode="Markdown")
+
+
 async def check_price_alerts(context):
     all_alerts = get_all_price_alerts()
     for user_id_str, alerts in all_alerts.items():
@@ -973,6 +1076,7 @@ def main():
     app.add_handler(CommandHandler("sentiment", sentiment_handler))
     app.add_handler(CommandHandler("movers", movers_handler))
     app.add_handler(CommandHandler("summary", summary_handler))
+    app.add_handler(CommandHandler("gainers52w", gainers52w_handler))
     app.add_handler(CommandHandler("alert", alert_handler))
     app.add_handler(CommandHandler("alerts", list_alerts_handler))
     app.add_handler(CommandHandler("delalert", delalert_handler))
