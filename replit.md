@@ -1,54 +1,89 @@
-# Stock Analysis Telegram Bot
+# MarketMasteryAI Bot
 
-A Telegram bot that performs full technical analysis on any stock ticker and returns buy/sell signals, RSI, EMA, MACD, Bollinger Bands, volume analysis, breakout alerts, and swing trade setups.
+AI-powered Indian stock market Telegram bot for NSE/BSE traders.
 
 ## Run & Operate
 
-- `cd telegram-bot && python bot.py` — run the Telegram bot (via the "Stock Analysis Telegram Bot" workflow)
+- `cd telegram-bot && python bot.py` — run the Telegram bot (via "Stock Analysis Telegram Bot" workflow)
 - Required secret: `TELEGRAM_BOT_TOKEN` — from @BotFather on Telegram
 
 ## Stack
 
 - Python 3.11
-- python-telegram-bot v20+ (async polling)
+- python-telegram-bot v20+ (async polling with job-queue)
 - yfinance — market data from Yahoo Finance
-- pandas + numpy — indicator computations (no ta-lib dependency)
+- pandas + numpy — all indicator computations (no ta-lib)
 
-## Where things live
+## File Map
 
-- `telegram-bot/bot.py` — main bot entry point, command + message handlers
-- `telegram-bot/analysis.py` — all technical indicators (RSI, EMA, MACD, Bollinger, ATR, OBV, breakout, swing setup)
-- `telegram-bot/formatter.py` — formats analysis dict into a Telegram Markdown message
-- `telegram-bot/requirements.txt` — Python dependencies
+| File | Purpose |
+|---|---|
+| `bot.py` | Main entry point. All handlers, `_fetch_many()` parallel fetcher, `is_valid_ticker()` validator |
+| `analysis.py` | 6-factor signal model, all indicators, persistent name cache |
+| `formatter.py` | Mobile-first Telegram message formatter |
+| `utils.py` | Currency helpers, signal icons, RSI zone labels, market status |
+| `watchlist.py` | Per-user watchlist persistence (JSON) |
+| `alerts.py` | Daily scan alert scheduling (JSON) |
+| `price_alerts.py` | Price alert persistence and management |
+| `journal.py` | Trade journal with P&L, streak, equity curve |
+| `backtest.py` | EMA 9/21 crossover backtesting |
+| `sentiment.py` | Keyword-based news sentiment via yfinance |
+| `name_cache.json` | Persistent stock name cache (avoid repeated slow info calls) |
 
-## Architecture decisions
+## Architecture Decisions
 
-- All indicators implemented from scratch using pandas/numpy — no ta-lib required, avoids C-library install issues
-- Async handlers using python-telegram-bot v20+ ApplicationBuilder pattern
-- Swing trade stop loss / targets derived from ATR (14) for dynamic risk sizing
-- Breakout detection uses rolling 20-day high/low + volume surge threshold (1.5x avg)
-- Signal score combines RSI zone, EMA cross, MACD cross, and price vs EMA21
+### Speed
+- `_fetch_many()` in bot.py: async parallel fetcher using `asyncio.to_thread` + `asyncio.Semaphore(5)`
+  Makes screeners (20 stocks) ~8× faster: ~10s instead of ~100s
+- `name_cache.json`: persistent stock name cache avoids repeated `stock.info` calls (3-8s each)
+- All screener commands (`/nifty`, `/top`, `/movers`, `/breakout`, `/heatmap`, `/sector`, `/oversold`, `/gainers52w`) use `_fetch_many()`
+- Single-ticker commands (`/signal`, `/swing`, `/intraday`, etc.) use `asyncio.to_thread(analyze, ticker)`
 
-## Product
+### Signal Quality — 6-Factor Model
+Each factor contributes exactly ±1 (score bounded −6 to +6):
+1. RSI zone (< 32 oversold = +1, > 68 overbought = −1)
+2. EMA9 vs EMA21 cross (short-term trend)
+3. MACD vs Signal line (momentum)
+4. Price vs EMA21 (immediate price action)
+5. Price vs EMA50 (medium-term trend)
+6. EMA50 vs EMA200 (macro trend — golden/death cross filter)
 
-Users send any ticker symbol (e.g. `AAPL`, `TSLA`, `TCS.NS`) and receive:
-- RSI (14) with zone labeling
-- EMA 9 / 21 / 50 / 200
-- MACD + signal + histogram
-- Bollinger Bands (20, 2σ)
-- Volume analysis + OBV trend
-- Breakout / Breakdown alerts (20-day S/R with volume confirmation)
-- Swing trade setup: direction, stop loss, Target 1 & 2 (ATR-based)
-- Overall Buy / Sell / Hold signal with reasoning
+Thresholds: STRONG BUY ≥ +4 | BUY ≥ +2 | HOLD −1…+1 | SELL ≤ −2 | STRONG SELL ≤ −4
 
-## User preferences
+The EMA50 > EMA200 macro filter significantly reduces false signals in bear markets.
+Formatter shows `X/6 indicators aligned` for beginner context.
 
-- Python bot (not Node.js)
-- No external TA library required — pure pandas/numpy implementation
+### Data Period
+- Default: `1y` (~252 bars) for reliable EMA200 computation
+- All indicators include `_safe()` NaN protection
 
-## Gotchas
+### Validation
+- `is_valid_ticker()`: regex `^[\^A-Z0-9][A-Z0-9\.\-]{0,19}$`
+- `_require_ticker()`: shared helper validates + fetches in one step for single-ticker commands
+- All bad input returns user-friendly error with .NS / ^NSEI examples
 
-- Indian stocks need `.NS` suffix (NSE) or `.BO` (BSE), e.g. `TCS.NS`, `RELIANCE.NS`
-- Nifty 50 index: use `^NSEI`
+## Commands
+
+Single stock: `/signal` `/swing` `/intraday` `/summary` `/report` `/sentiment`
+Market: `/nifty` `/top` `/movers` `/breakout` `/heatmap` `/sector`
+Screeners: `/gainers52w` `/oversold` `/compare`
+Watchlist: `/watchlist` `/add` `/remove` `/scan` `/clear`
+Alerts: `/alert` `/alerts` `/delalert` `/setalert` `/myalert` `/cancelalert`
+Journal: `/journal` `/trades` `/pnl` `/streak` `/deltrade`
+Risk: `/risk` `/backtest`
+
+## Indian Market Tips
+
+- NSE stocks: `TCS.NS`, `RELIANCE.NS`, `HDFCBANK.NS`
+- BSE stocks: `TCS.BO`, `RELIANCE.BO`
+- Nifty 50: `^NSEI` | Bank Nifty: `^NSEBANK`
+- NSE hours: 9:15 AM – 3:30 PM IST (UTC+5:30)
 - yfinance may rate-limit on rapid repeated requests
-- Always run `pip install -r telegram-bot/requirements.txt` after a fresh environment
+
+## User Preferences
+
+- Python bot only (not Node.js)
+- No external TA library — pure pandas/numpy implementation
+- No new features — focus on quality, stability, speed, UI, and intelligence
+- Mobile-first message formatting
+- Beginner-friendly explanations in every section
