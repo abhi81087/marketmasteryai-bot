@@ -1,0 +1,152 @@
+Upgrade and finalize my Telegram trading bot "MarketMasteryAIBot" into a complete premium AI-powered Indian stock market assistant focused on NSE/BSE traders.
+
+IMPORTANT DEFAULT SETTINGS:
+
+- Prioritize Indian stocks only by default.
+- Use NSE/BSE tickers like RELIANCE.NS, TCS.NS, INFY.NS, SBIN.NS, HDFCBANK.NS etc.
+- Use ₹ INR currency formatting everywhere instead of USD ($).
+- If ticker ends with .NS or .BO automatically apply Indian formatting.
+- Include NIFTY, BANKNIFTY and FINNIFTY support.
+
+BOT GOAL:
+Create a highly user-friendly, professional, fast and visually attractive Telegram trading assistant that provides technical analysis, swing setups, market scanners, alerts, options analysis and trader tools.
+
+MAKE THE BOT PREMIUM LOOKING:
+
+- Clean formatted outputs
+- Proper spacing
+- Rich emojis
+- Modern signal cards
+- Easy-to-read structure
+- Beginner friendly explanations
+- Attractive Telegram message formatting
+
+CORE FEATURES TO INCLUDE:
+
+1. Technical Analysis Engine
+
+- RSI
+- EMA 9/21/50/200
+- MACD
+- Bollinger Bands
+- ATR
+- Volume analysis
+- OBV trend
+- Support & resistance
+- Breakout detection
+- Swing trade setups
+- Confidence score
+
+2. Commands
+   /start
+   /help
+   /signal
+   /swing
+   /intraday
+   /breakout
+   /watchlist
+   /top
+   /compare
+   /sentiment
+   /movers
+   /summary
+   /alert
+   /gainers52w
+   /oversold
+   /report
+   /sector
+   /heatmap
+   /risk
+   /journal
+   /streak
+   /backtest
+
+3. AI Signal Logic
+   Generate:
+
+- BUY
+- SELL
+- WAIT
+  signals using combined RSI + EMA + MACD + volume + breakout logic.
+
+4. Indian Market Focus
+
+- NSE/BSE stocks
+- NIFTY analysis
+- BANKNIFTY analysis
+- Indian market timings
+- Indian market terminology
+
+5. Smart Screeners
+
+- 52 week breakout stocks
+- Oversold reversal stocks
+- Momentum stocks
+- Volume breakout stocks
+- Trend continuation setups
+
+6. Alert System
+   Create Telegram alerts for:
+
+- Price crossing levels
+- Breakouts
+- RSI conditions
+- EMA crossovers
+- Volume spikes
+
+7. User Friendly Features
+
+- Simple explanations
+- Beginner-friendly insights
+- Short trader notes
+- Risk/reward display
+- SL and target suggestions
+
+8. Trade Journal System
+   Allow users to:
+
+- Save trades
+- Track profit/loss
+- View streaks
+- Equity curve summary
+
+9. PDF Style Reports
+   Generate clean shareable analysis reports.
+
+10. Sector Strength Analysis
+    Show strongest and weakest sectors based on signals and average RSI.
+
+11. Heatmap View
+    Create visual stock signal heatmaps.
+
+12. Backtesting
+    Simple moving average crossover backtesting with:
+
+- win rate
+- total return
+- trade count
+
+13. Performance Optimization
+
+- Fast responses
+- Clean code
+- Modular structure
+- Error handling
+- Retry handling
+- Stable API calls
+
+14. Make the bot feel like a professional AI trading assistant, not a simple script.
+
+15. Add educational disclaimer everywhere:
+    "This is for educational purposes only. Not financial advice."
+
+Finally:
+
+- Refactor and clean the full codebase
+- Optimize all outputs
+- Improve UI formatting
+- Make the bot production-ready
+- Ensure all commands work correctly
+- Remove all USD formatting bugs
+- Improve mobile readability
+- Make all outputs visually premium
