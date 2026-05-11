@@ -1,0 +1,9 @@
+python-telegram-bot
+requests
+pandas
+numpy
+yfinance
+beautifulsoup4
+lxml
+openai
+google-generativeai
